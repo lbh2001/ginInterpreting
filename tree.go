@@ -3,7 +3,7 @@ package tree
 /**
  * @Author: lbh
  * @Date: 2021/4/13
- * @Description: gin源码解析——tree.go核心逻辑代码(addRoute&insertChild)
+ * @Description: gin源码解析——tree.go核心逻辑代码
  */
 
 // 该前缀树实现的核心代码:
