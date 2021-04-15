@@ -293,7 +293,7 @@ walk:
 			}
 
 			// 至此 已经判断完了全部条件
-			// n已经是(可能经过了分裂合并)后与path没有任何公共前缀的结点了
+			// n已经是(可能经过了分裂合并)与path没有任何公共前缀的结点了
 			// 将path插入为n的子结点
 			n.insertChild(path, fullPath, handlers)
 			return
@@ -320,8 +320,8 @@ walk:
 
 // 查找path中是否有通配符
 // 返回:
-// wildcard  通配符结点"参数名"
-// i         通配符结点起始位置索引
+// wildcard  通配符结点"参数名"(非通配符会返回空字符串)
+// i         通配符结点起始位置索引(非通配符会返回-1)
 // valid     是否有效
 // 如:  path = /user/:name/home
 // 则:  wildcard = :name   i = 6  valid = true
@@ -352,15 +352,20 @@ func findWildcard(path string) (wildcard string, i int, valid bool) {
 	return "", -1, false
 }
 
-// 在n结点下插入孩子结点
+// 在结点n下插入孩子结点
 func (n *node) insertChild(path string, fullPath string, handlers HandlersChain) {
+	// 为通配符结点准备的for循环
 	for {
 		// Find prefix until first wildcard
+		// 查找通配符结点
 		wildcard, i, valid := findWildcard(path)
+
+		// 如果不是通配符结点则退出循环
 		if i < 0 { // No wildcard found
 			break
 		}
 
+		// 如果无效 即通配符结点名字中带有通配符(如 :name*) 则报错
 		// The wildcard name must not contain ':' and '*'
 		if !valid {
 			panic("only one wildcard per path segment is allowed, has: '" +
@@ -368,30 +373,47 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 		}
 
 		// check if the wildcard has a name
+		// 通配符结点必须有名字
+		// 如 wildcard = : 或 *
+		// 那么len(wildcard) < 2
 		if len(wildcard) < 2 {
 			panic("wildcards must be named with a non-empty name in path '" + fullPath + "'")
 		}
 
+		// 如果是通配结点中的参数结点
 		if wildcard[0] == ':' { // param
 			if i > 0 {
 				// Insert prefix before the current wildcard
+				// path[:i]其实就是通配结点前面的那一部分前缀
+				// 由于通配结点要额外存放
+				// 所以要其前缀先保存下来
+				// 再将通配结点插入作为其前缀的子结点
+				// 如: path = /user/:name/home/about
+				// 那么要将其分为/user 、 /:name 、 /home/about三部分
 				n.path = path[:i]
 				path = path[i:]
 			}
 
+			// wildcard = :name
 			child := &node{
 				nType:    param,
 				path:     wildcard,
 				fullPath: fullPath,
 			}
+			// 将child加入为n的子结点
 			n.addChild(child)
 			n.wildChild = true
+			// 切换到通配结点
 			n = child
 			n.priority++
 
 			// if the path doesn't end with the wildcard, then there
 			// will be another non-wildcard subpath starting with '/'
+			// 如果path并不是以wildcard结束的，说明后面还有其他结点
+			// 注意：这时候的path已经是以通配结点路径开头了
 			if len(wildcard) < len(path) {
+				// 将通配结点后面的路径作为一个结点插入到通配结点下
+				// (这时候n为通配结点 在上面已经完成了结点切换)
 				path = path[len(wildcard):]
 
 				child := &node{
@@ -399,6 +421,7 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 					fullPath: fullPath,
 				}
 				n.addChild(child)
+				// 进行下一轮循环
 				n = child
 				continue
 			}
@@ -409,10 +432,15 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 		}
 
 		// catchAll
+		// 全匹配类型的结点 (*类型)
+		// *类型的结点必须在路径的最后部分 即不能有子结点
 		if i+len(wildcard) != len(path) {
 			panic("catch-all routes are only allowed at the end of the path in path '" + fullPath + "'")
 		}
 
+		// n.path不能以'/'结束
+		// 因为要在n.path下先插入 '/'结点
+		// 再在该'/'结点下插入全匹配结点
 		if len(n.path) > 0 && n.path[len(n.path)-1] == '/' {
 			panic("catch-all conflicts with existing handle for the path segment root in path '" + fullPath + "'")
 		}
@@ -423,9 +451,12 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 			panic("no / before catch-all in path '" + fullPath + "'")
 		}
 
+		// 保留前缀
 		n.path = path[:i]
 
 		// First node: catchAll node with empty path
+		// 创建第一个结点 是空路径
+		// 其子结点用于存放全匹配结点
 		child := &node{
 			wildChild: true,
 			nType:     catchAll,
@@ -433,11 +464,17 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 		}
 
 		n.addChild(child)
+		// 注意 上面进行了i--的操作
+		// 此时path[i]是'/'
+		// 即通配结点将以'/'开头
+		// 因此n.indices='/'
 		n.indices = string('/')
+		// 切换到子结点
 		n = child
 		n.priority++
 
 		// second node: node holding the variable
+		// 创建第二个结点用来存放变量(全匹配结点)
 		child = &node{
 			path:     path[i:],
 			nType:    catchAll,
@@ -451,12 +488,17 @@ func (n *node) insertChild(path string, fullPath string, handlers HandlersChain)
 	}
 
 	// If no wildcard was found, simply insert the path and handle
+	// 如果从for循环中跳出来了，说明path中没有通配结点
+	// 那么正常插入即可
 	n.path = path
 	n.handlers = handlers
 	n.fullPath = fullPath
 }
 
 // addChild will add a child node, keeping wildcards at the end
+// 这个是往n结点的孩子结点中添加child孩子结点
+// 只改变n.children的内容
+// 真正插入的操作是上面的insertChild
 func (n *node) addChild(child *node) {
 	if n.wildChild && len(n.children) > 0 {
 		wildcardChild := n.children[len(n.children)-1]
